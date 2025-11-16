@@ -1,0 +1,8 @@
+{
+  "model_type": "xgboost_cox",
+  "horizon_days": 1826,
+  "risk_thresholds": {
+    "low": 0.02,
+    "high": 0.07
+  }
+}

@@ -1,0 +1,4 @@
+
+line-length = 100
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]  # Allow long lines where helpful (plots, docstrings)

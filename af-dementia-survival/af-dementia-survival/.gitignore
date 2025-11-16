@@ -1,0 +1,17 @@
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+.env/
+
+# Data & runs
+runs/
+data/splits/
+
+# IDE
+.vscode/
+.idea/

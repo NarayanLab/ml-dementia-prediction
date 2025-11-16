@@ -1,0 +1,24 @@
+{
+  "feature_names": [
+    "AF_age_4",
+    "AF_age_3",
+    "weight",
+    "AF_age_2",
+    "bmi",
+    "DM",
+    "Marital",
+    "TIA_CVA_Stroke",
+    "RR Value 3mo",
+    "Depression",
+    "QRS Value 3mo",
+    "HTN",
+    "Cognitive_Impairment",
+    "Sodium Value 3mo",
+    "Calcium Value 3mo",
+    "Osteoarthritis",
+    "race",
+    "Insurance",
+    "Osteoporosis",
+    "Parkinson"
+  ]
+}

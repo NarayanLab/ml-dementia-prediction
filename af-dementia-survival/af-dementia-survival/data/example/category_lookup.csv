@@ -1,0 +1,15 @@
+column,code,meaning
+race,0,White
+race,1,Black
+race,2,Other
+marital,0,Single
+marital,1,Married
+marital,2,Divorced/widowed
+marital,3,Separated
+insurance,0,Public
+insurance,1,Private
+insurance,2,Unknown
+Age_1,1,1 if age ∈ [65,74], else 0
+Age_2,1,1 if age ∈ [75,84], else 0
+Age_3,1,1 if age ≥ 85, else 0
+Age_*,0,All zeros implies age ≤ 64

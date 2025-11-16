@@ -1,0 +1,40 @@
+time_unit: days
+columns:
+  id: PID
+  time: time
+  event: event
+features:
+  include:
+  - Age_1
+  - Age_2
+  - Age_3
+  - weight
+  - bmi
+  - diabetes
+  - marital
+  - stroke
+  - RR_value
+  - depression
+  - qrs_axis
+  - hypertension
+  - cognitive_impairment
+  - sodium
+  - calcium
+  - osteoarthritis
+  - race
+  - insurance
+  - osteoporosis
+  - parkinson
+  exclude: []
+splits:
+  test_size: 0.2
+  val_size: 0.2
+  random_state: 42
+preprocess:
+  impute: median
+  scale: standard
+plotting:
+  horizon_days: 3600
+  decision_thresholds:
+  - 0.02
+  - 0.07
