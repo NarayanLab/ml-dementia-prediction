@@ -493,7 +493,7 @@ const App: React.FC = () => {
 
             <div className="form-row">
               <NumberInput
-                label="QRS Duration"
+                label="QRS Axis"
                 value={formData.qrs_duration}
                 onChange={(value) => handleInputChange('qrs_duration', value)}
                 unit="ms"
