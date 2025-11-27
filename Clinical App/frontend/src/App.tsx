@@ -496,7 +496,7 @@ const App: React.FC = () => {
                 label="QRS Axis"
                 value={formData.qrs_duration}
                 onChange={(value) => handleInputChange('qrs_duration', value)}
-                unit="ms"
+                unit="degrees"
                 min={60}
                 max={200}
               />
