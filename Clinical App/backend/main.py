@@ -13,7 +13,10 @@ app = FastAPI(title="Dementia Risk Assessment API", version="2.0.0")
 # Enable CORS for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React dev server
+    allow_origins=[
+        "http://localhost:3000",  # React dev server
+        "https://ml-dementia-prediction-1.onrender.com"  # Production frontend
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
