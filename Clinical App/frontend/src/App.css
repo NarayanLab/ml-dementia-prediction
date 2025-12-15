@@ -480,6 +480,13 @@ body {
   margin-bottom: 0;
 }
 
+.footer .disclaimer {
+  font-size: 0.65rem;
+  color: #9ca3af;
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
   .app {

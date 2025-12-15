@@ -90,20 +90,49 @@ const NumberInput: React.FC<{
   unit?: string;
   min?: number;
   max?: number;
-}> = ({ label, value, onChange, step = 1, unit, min, max }) => (
-  <div className="input-group">
-    <label className="input-label">{label} {unit && <span className="unit">({unit})</span>}</label>
-    <input
-      type="number"
-      value={value}
-      onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-      step={step}
-      min={min}
-      max={max}
-      className="number-input"
-    />
-  </div>
-);
+}> = ({ label, value, onChange, step = 1, unit, min, max }) => {
+  const [displayValue, setDisplayValue] = React.useState<string>(String(value));
+
+  // Sync display value when prop value changes externally
+  React.useEffect(() => {
+    setDisplayValue(String(value));
+  }, [value]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawValue = e.target.value;
+    setDisplayValue(rawValue);
+
+    const parsed = parseFloat(rawValue);
+    if (!isNaN(parsed)) {
+      onChange(parsed);
+    }
+  };
+
+  const handleBlur = () => {
+    // On blur, if empty or invalid, reset to 0
+    const parsed = parseFloat(displayValue);
+    if (isNaN(parsed) || displayValue === '') {
+      setDisplayValue('0');
+      onChange(0);
+    }
+  };
+
+  return (
+    <div className="input-group">
+      <label className="input-label">{label} {unit && <span className="unit">({unit})</span>}</label>
+      <input
+        type="number"
+        value={displayValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        step={step}
+        min={min}
+        max={max}
+        className="number-input"
+      />
+    </div>
+  );
+};
 
 const SelectInput: React.FC<{
   label: string;
@@ -187,11 +216,11 @@ const App: React.FC = () => {
     hr_method: 'heart_rate',
     heart_rate: 77,
     rr_interval: 778,
-    qrs_duration: 100,
+    qrs_duration: 17,
     sodium_value: 138.5,
     calcium_unit: 'mg_dl',
-    calcium_mg_dl: 9.6,
-    calcium_mmol_l: 2.4,
+    calcium_mg_dl: 8.6,
+    calcium_mmol_l: 2.15,
     osteoarthritis: false,
     race: 'White',
     insurance: 'Public',
@@ -301,7 +330,7 @@ const App: React.FC = () => {
     <div className="app">
       <div className="container">
         <header className="header">
-          <h1>Dementia Risk Assessment</h1>
+          <h1>Stanford Dementia in AF Risk Calculator</h1>
         </header>
 
         <div className="form-section">
@@ -633,7 +662,7 @@ const App: React.FC = () => {
 
         <footer className="footer">
           <p>XGBoost-Cox model for 5-year dementia risk prediction in AF patients</p>
-          <p>For clinical decision support only. Not intended as sole basis for medical decisions.</p>
+          <p className="disclaimer">This platform and all associated software, algorithms, visualizations, and outputs are provided for research and informational purposes only. They are not intended for clinical use, not intended to diagnose, treat, cure, or prevent any disease, and have not been reviewed or approved by the U.S. Food and Drug Administration (FDA), the UK Medicines and Healthcare products Regulatory Agency (MHRA), or any other regulatory authority.</p>
         </footer>
       </div>
     </div>
