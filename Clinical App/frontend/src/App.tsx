@@ -643,8 +643,9 @@ const App: React.FC = () => {
                   </div>
                   <div className="risk-labels">
                     <span>0%</span>
-                    <span>{result.low_threshold.toFixed(0)}%</span>
-                    <span>{result.high_threshold.toFixed(0)}%</span>
+                    <span>25%</span>
+                    <span>50%</span>
+                    <span>75%</span>
                     <span>100%</span>
                   </div>
                 </div>
