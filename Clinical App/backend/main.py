@@ -5,48 +5,59 @@ import xgboost as xgb
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 import os
 
-app = FastAPI(title="Dementia Risk Assessment API", version="2.0.0")
+app = FastAPI(title="Dementia Risk Assessment API", version="4.0.0")
 
-# Enable CORS for React frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  # React dev server
-        "https://ml-dementia-prediction-1.onrender.com"  # Production frontend
+        "http://localhost:3000",
+        "https://ml-dementia-prediction-1.onrender.com"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global variables for model artifacts
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "model")
+MODEL_FILE = "xgb_cox_22feature.json"
+
 booster = None
-feature_manifest = None
-app_metadata = None
-baseline_hazard = None
+feature_names = None
+feature_means = None
+baseline = None
+dca_band = None
+
 
 class PatientData(BaseModel):
     af_age: int
-    marital_status: str  # "Single", "Married", "Divorced/Widowed"
+    marital_status: str
     weight: float
+    height: float
     bmi: float
     diabetes: bool
     hypertension: bool
     stroke_tia: bool
     depression: bool
-    cognitive_impairment: bool
-    rr_interval: float
-    qrs_duration: int
-    sodium_value: float
-    calcium_mg_dl: float
+    cognitive_deficit: bool
     osteoarthritis: bool
-    race: int  # Encoded race value
-    insurance: int  # Encoded insurance value
-    osteoporosis: bool
     parkinson: bool
+    ppi: bool
+    insurance: int
+    rr_interval: float
+    qrs_duration: float
+    sodium_value: float
+    potassium_value: float
+    creatinine_value: float
+    calcium_mg_dl: float
+    # Availability flags (True = available, False = missing)
+    # Only Calcium and HCT have missingness flags surfaced in the UI — those were
+    # the only _missing flags selected as important predictors. Other labs always
+    # have values from the form, so their _missing flags stay 0 (set from means dict).
+    calcium_available: bool
+    hct_available: bool
+
 
 class RiskResponse(BaseModel):
     risk_percentage: float
@@ -55,144 +66,143 @@ class RiskResponse(BaseModel):
     low_threshold: float
     high_threshold: float
 
+
 def load_artifacts():
-    """Load all model artifacts and configuration files"""
-    global booster, feature_manifest, app_metadata, baseline_hazard
+    global booster, feature_names, feature_means, baseline, dca_band
 
-    try:
-        # Load XGBoost model
-        booster = xgb.Booster()
-        booster.load_model("../xgb_cox_model.json")
+    # 22-feature model: BIC-selected features refit with the 77-feature model's
+    # best hyperparameters (see model/training_meta.json, test C-index 0.822).
+    # Every one of the 22 comes from the form -- nothing is imputed at request
+    # time.
+    booster = xgb.Booster()
+    booster.load_model(os.path.join(MODEL_DIR, MODEL_FILE))
 
-        # Load new configuration files
-        with open("../feature_manifest.json") as f:
-            feature_manifest = json.load(f)
-        with open("../app_metadata.json") as f:
-            app_metadata = json.load(f)
-        with open("../baseline_hazard.json") as f:
-            baseline_hazard = json.load(f)
+    # The booster is the authority on column order. Do NOT derive this from the
+    # means dict or from feature_importance_ranking.json -- that file is an
+    # importance ranking, not the column order, and using it would silently
+    # scramble the inputs.
+    feature_names = booster.feature_names
 
-        print("Model artifacts loaded successfully")
-        print(f"Features: {len(feature_manifest['feature_names'])}")
-        print(f"Horizon: {app_metadata['horizon_days']} days")
+    # Population means: form defaults, plus the fill value for Calcium when the
+    # clinician marks it unavailable.
+    with open(os.path.join(MODEL_DIR, "feature_means.json")) as f:
+        feature_means = json.load(f)
 
-    except Exception as e:
-        print(f"Error loading model artifacts: {e}")
-        raise e
+    # Baseline survival and risk thresholds. These are properties of this
+    # specific fit -- they must not be mixed with another model's.
+    with open(os.path.join(MODEL_DIR, "baseline.json")) as f:
+        baseline = json.load(f)
+    with open(os.path.join(MODEL_DIR, "dca_band.json")) as f:
+        dca_band = json.load(f)
 
-def predict_margin(booster, Xrow_df):
-    """Get model prediction margin (log hazard ratio)"""
-    return booster.predict(xgb.DMatrix(Xrow_df), output_margin=True)
+    missing = set(feature_names) - set(feature_means)
+    if missing:
+        raise RuntimeError(f"feature_means is missing model features: {sorted(missing)}")
+    if len(feature_names) != 22:
+        raise RuntimeError(f"expected a 22-feature model, got {len(feature_names)}")
 
-def calculate_absolute_risk(margin, event_times, cum_baseline_hazard, horizon_days):
-    """
-    Calculate absolute risk at specified horizon using cumulative baseline hazard.
+    print(f"Loaded model: {len(feature_names)} features, S0(t*={baseline['t_star']})={baseline['S0_tstar']:.4f}")
 
-    Args:
-        margin: XGBoost prediction margin (log hazard ratio)
-        event_times: Array of event times in years
-        cum_baseline_hazard: Cumulative baseline hazard at each event time
-        horizon_days: Prediction horizon in days (e.g., 1826 for 5 years)
 
-    Returns:
-        Absolute risk probability at horizon
-    """
-    # Convert horizon from days to years
-    horizon_years = horizon_days / 365.25
+def calculate_absolute_risk(margin: float) -> float:
+    S0 = baseline["S0_tstar"]
+    hr = np.exp(float(margin))
+    survival = S0 ** hr
+    return 1.0 - survival
 
-    # Find the cumulative baseline hazard at the horizon
-    event_times_array = np.array(event_times)
-    cum_hazard_array = np.array(cum_baseline_hazard)
-
-    # Find the index where event_time >= horizon_years
-    idx = np.searchsorted(event_times_array, horizon_years, side='right') - 1
-    idx = max(0, min(idx, len(cum_hazard_array) - 1))
-
-    H0_t = cum_hazard_array[idx]
-
-    # Calculate hazard ratio from margin
-    hazard_ratio = np.exp(float(margin[0]))
-
-    # Calculate survival probability: S(t) = exp(-H0(t) * exp(margin))
-    survival_prob = np.exp(-H0_t * hazard_ratio)
-
-    # Risk is 1 - survival
-    risk = 1.0 - survival_prob
-
-    return risk
 
 @app.on_event("startup")
 async def startup_event():
-    """Load model artifacts on startup"""
     load_artifacts()
+
 
 @app.get("/")
 async def root():
-    return {"message": "Dementia Risk Assessment API", "status": "running"}
+    return {"message": "Dementia Risk Assessment API", "status": "running", "version": "4.0.0"}
+
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "model_loaded": booster is not None,
+        "model_file": MODEL_FILE,
+        "features_count": len(feature_names) if feature_names else 0,
+        "t_star_years": baseline["t_star"] if baseline else None,
+        "S0_tstar": baseline["S0_tstar"] if baseline else None,
+        "dca_band": dca_band["band"] if dca_band else None,
+    }
+
+
+MARITAL_CODES = {"Single": 0, "Married": 1, "Divorced/Widowed": 2, "Unknown": 3}
+
+# Features the form does not supply directly, so they may legitimately remain at
+# their population mean. Calcium is filled from the mean when the clinician marks
+# it unavailable; everything else in the 22 must come from the request.
+MEAN_FILLED_OK = {"Calcium Value 3mo"}
+
+
+def build_feature_row(patient: PatientData) -> dict:
+    """Map a request onto the model's 22 features.
+
+    Seeded from population means so a missing key can never become NaN, but every
+    feature except Calcium is then overwritten from the form. Kept separate from
+    the endpoint so tests can assert that directly.
+    """
+    row = dict(feature_means)
+
+    row["AF_Age"] = float(patient.af_age)
+    row["weight"] = patient.weight
+    row["height"] = patient.height
+    row["bmi"] = patient.bmi
+    row["Marital"] = MARITAL_CODES[patient.marital_status]
+    row["Insurance"] = patient.insurance
+    row["DM"] = int(patient.diabetes)
+    row["HTN"] = int(patient.hypertension)
+    row["TIA_CVA_Stroke"] = int(patient.stroke_tia)
+    row["Depression"] = int(patient.depression)
+    row["Cognitive_Deficit"] = int(patient.cognitive_deficit)
+    row["Osteoarthritis"] = int(patient.osteoarthritis)
+    row["Parkinson"] = int(patient.parkinson)
+    row["PPI"] = int(patient.ppi)
+
+    # Labs always provided by the form. Their _missing flags were not selected
+    # into the 22, so there is nothing to set alongside them.
+    row["Sodium Value 3mo"] = patient.sodium_value
+    row["Potassium Value 3mo"] = patient.potassium_value
+    row["Creatinine Value 3mo"] = patient.creatinine_value
+    row["RR Value 3mo"] = patient.rr_interval
+    row["QRS Value 3mo"] = patient.qrs_duration  # QRS axis in degrees, can be negative
+
+    # Calcium: availability surfaced in UI (Calcium_missing is one of the 22)
+    if patient.calcium_available:
+        row["Calcium Value 3mo"] = patient.calcium_mg_dl
+        row["Calcium_missing"] = 0
+    else:
+        row["Calcium_missing"] = 1
+
+    # HCT: flag-only feature, surfaced in UI (HCT_missing is one of the 22)
+    row["HCT_missing"] = 0 if patient.hct_available else 1
+
+    return row
+
 
 @app.post("/predict", response_model=RiskResponse)
 async def predict_risk(patient: PatientData):
-    """Calculate dementia risk for a patient using the 20-feature model"""
+    if booster is None:
+        raise HTTPException(status_code=500, detail="Model not loaded")
 
     try:
-        if booster is None:
-            raise HTTPException(status_code=500, detail="Model not loaded")
+        row = build_feature_row(patient)
 
-        # Get model configuration
-        feature_names = feature_manifest["feature_names"]
-        risk_thresholds = app_metadata["risk_thresholds"]
-        horizon_days = app_metadata["horizon_days"]
-        event_times = baseline_hazard["event_times"]
-        cum_baseline_hazard = baseline_hazard["cum_baseline_hazard"]
-
-        # Convert AF age to categorical variables
-        af_age_2 = 1 if 65 <= patient.af_age < 75 else 0
-        af_age_3 = 1 if 75 <= patient.af_age < 85 else 0
-        af_age_4 = 1 if patient.af_age >= 85 else 0
-
-        # Convert marital status to numeric (0=Single, 1=Married, 2=Divorced/Widowed, 3=Unknown)
-        marital_code = {"Single": 0, "Married": 1, "Divorced/Widowed": 2, "Unknown": 3}[patient.marital_status]
-
-        # Build feature dictionary with ONLY the 20 features the model expects
-        row = {
-            "AF_age_4": af_age_4,
-            "AF_age_3": af_age_3,
-            "weight": patient.weight,
-            "AF_age_2": af_age_2,
-            "bmi": patient.bmi,
-            "DM": 1 if patient.diabetes else 0,
-            "Marital": marital_code,
-            "TIA_CVA_Stroke": 1 if patient.stroke_tia else 0,
-            "RR Value 3mo": patient.rr_interval,
-            "Depression": 1 if patient.depression else 0,
-            "QRS Value 3mo": patient.qrs_duration,
-            "HTN": 1 if patient.hypertension else 0,
-            "Cognitive_Impairment": 1 if patient.cognitive_impairment else 0,
-            "Sodium Value 3mo": patient.sodium_value,
-            "Calcium Value 3mo": patient.calcium_mg_dl,
-            "Osteoarthritis": 1 if patient.osteoarthritis else 0,
-            "race": patient.race,
-            "Insurance": patient.insurance,
-            "Osteoporosis": 1 if patient.osteoporosis else 0,
-            "Parkinson": 1 if patient.parkinson else 0,
-        }
-
-        # Create DataFrame with features in the exact order expected by the model
+        # Build DataFrame in the model's expected feature order
         X_row = pd.DataFrame([row], columns=feature_names)
 
-        # Calculate risk using the XGBoost model
-        margin = predict_margin(booster, X_row)
-        risk = calculate_absolute_risk(
-            margin,
-            event_times,
-            cum_baseline_hazard,
-            horizon_days
-        )
+        margin = booster.predict(xgb.DMatrix(X_row), output_margin=True)[0]
+        risk = calculate_absolute_risk(margin)
         risk_percentage = risk * 100
 
-        # Determine risk category and color
-        low_threshold = risk_thresholds["low"]
-        high_threshold = risk_thresholds["high"]
+        low_threshold, high_threshold = dca_band["band"]
 
         if risk <= low_threshold:
             risk_category = "Low Risk"
@@ -209,23 +219,14 @@ async def predict_risk(patient: PatientData):
             risk_category=risk_category,
             risk_color=risk_color,
             low_threshold=low_threshold * 100,
-            high_threshold=high_threshold * 100
+            high_threshold=high_threshold * 100,
         )
 
     except KeyError as e:
-        raise HTTPException(status_code=400, detail=f"Missing required field: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Missing or invalid field: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "model_loaded": booster is not None,
-        "features_count": len(feature_manifest["feature_names"]) if feature_manifest else 0,
-        "horizon_days": app_metadata["horizon_days"] if app_metadata else 0
-    }
 
 if __name__ == "__main__":
     import uvicorn

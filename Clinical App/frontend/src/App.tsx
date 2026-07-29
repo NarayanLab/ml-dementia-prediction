@@ -2,29 +2,47 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import './App.css';
 
-// API URL - defaults to localhost for local development
-// For deployment, set REACT_APP_API_URL environment variable
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+// Population means (for imputing unavailable lab values)
+const MEANS = {
+  sodium: 138.5,
+  potassium: 4.2,
+  creatinine: 1.13,
+  calcium_mg_dl: 8.6,
+  rr_interval: 778,
+  heart_rate: 77,
+  qrs: 17,
+};
 
 interface PatientData {
   af_age: number;
   marital_status: string;
   weight: number;
+  height: number;
   bmi: number;
   diabetes: boolean;
   hypertension: boolean;
   stroke_tia: boolean;
   depression: boolean;
-  cognitive_impairment: boolean;
+  cognitive_deficit: boolean;
+  osteoarthritis: boolean;
+  parkinson: boolean;
+  ppi: boolean;
+  insurance: number;
   rr_interval: number;
   qrs_duration: number;
   sodium_value: number;
+  potassium_value: number;
+  creatinine_value: number;
   calcium_mg_dl: number;
-  osteoarthritis: boolean;
-  race: number;
-  insurance: number;
-  osteoporosis: boolean;
-  parkinson: boolean;
+  calcium_available: boolean;
+  hct_available: boolean;
+}
+
+interface Availability {
+  calcium: boolean;
+  hct: boolean;
 }
 
 interface FormInputs {
@@ -37,20 +55,23 @@ interface FormInputs {
   hypertension: boolean;
   stroke_tia: boolean;
   depression: boolean;
-  cognitive_impairment: boolean;
+  cognitive_deficit: boolean;
+  osteoarthritis: boolean;
+  parkinson: boolean;
+  ppi: boolean;
   hr_method: 'heart_rate' | 'rr_interval';
   heart_rate: number;
   rr_interval: number;
   qrs_duration: number;
   sodium_value: number;
+  potassium_value: number;
+  creatinine_value: number;
   calcium_unit: 'mg_dl' | 'mmol_l';
   calcium_mg_dl: number;
   calcium_mmol_l: number;
-  osteoarthritis: boolean;
-  race: string;
+  hct_value: number;
   insurance: string;
-  osteoporosis: boolean;
-  parkinson: boolean;
+  availability: Availability;
 }
 
 interface RiskResponse {
@@ -61,23 +82,24 @@ interface RiskResponse {
   high_threshold: number;
 }
 
-// Component definitions (moved outside App to prevent re-creation on each render)
 const ToggleSwitch: React.FC<{
   label: string;
   value: boolean;
   onChange: (value: boolean) => void;
-}> = ({ label, value, onChange }) => (
+  onLabel?: string;
+  offLabel?: string;
+}> = ({ label, value, onChange, onLabel = 'Yes', offLabel = 'No' }) => (
   <div className="toggle-switch-group">
     <label className="toggle-switch-label">{label}</label>
     <div className="toggle-switch-container">
-      <span className={`toggle-text ${!value ? 'active' : ''}`}>No</span>
+      <span className={`toggle-text ${!value ? 'active' : ''}`}>{offLabel}</span>
       <div
         className={`toggle-switch ${value ? 'on' : 'off'}`}
         onClick={() => onChange(!value)}
       >
         <div className="toggle-slider" />
       </div>
-      <span className={`toggle-text ${value ? 'active' : ''}`}>Yes</span>
+      <span className={`toggle-text ${value ? 'active' : ''}`}>{onLabel}</span>
     </div>
   </div>
 );
@@ -90,10 +112,10 @@ const NumberInput: React.FC<{
   unit?: string;
   min?: number;
   max?: number;
-}> = ({ label, value, onChange, step = 1, unit, min, max }) => {
+  disabled?: boolean;
+}> = ({ label, value, onChange, step = 1, unit, min, max, disabled }) => {
   const [displayValue, setDisplayValue] = React.useState<string>(String(value));
 
-  // Sync display value when prop value changes externally
   React.useEffect(() => {
     setDisplayValue(String(value));
   }, [value]);
@@ -101,7 +123,6 @@ const NumberInput: React.FC<{
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawValue = e.target.value;
     setDisplayValue(rawValue);
-
     const parsed = parseFloat(rawValue);
     if (!isNaN(parsed)) {
       onChange(parsed);
@@ -109,7 +130,6 @@ const NumberInput: React.FC<{
   };
 
   const handleBlur = () => {
-    // On blur, if empty or invalid, reset to 0
     const parsed = parseFloat(displayValue);
     if (isNaN(parsed) || displayValue === '') {
       setDisplayValue('0');
@@ -128,47 +148,30 @@ const NumberInput: React.FC<{
         step={step}
         min={min}
         max={max}
+        disabled={disabled}
         className="number-input"
       />
     </div>
   );
 };
 
-const SelectInput: React.FC<{
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (value: string) => void;
-}> = ({ label, value, options, onChange }) => (
-  <div className="input-group">
-    <label className="input-label">{label}</label>
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="select-input"
-    >
-      {options.map(option => (
-        <option key={option} value={option}>{option}</option>
-      ))}
-    </select>
-  </div>
-);
-
 const CompactToggle: React.FC<{
-  label: string;
+  label?: string;
   options: { value: string; label: string }[];
   value: string;
   onChange: (value: string) => void;
-}> = ({ label, options, value, onChange }) => (
-  <div className="compact-toggle-group">
-    <label className="input-label">{label}</label>
+  disabled?: boolean;
+}> = ({ label, options, value, onChange, disabled }) => (
+  <div className={`compact-toggle-group ${disabled ? 'disabled' : ''}`}>
+    {label && <label className="input-label">{label}</label>}
     <div className="compact-toggle-buttons">
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
           className={`compact-toggle-btn ${value === option.value ? 'active' : ''}`}
-          onClick={() => onChange(option.value)}
+          onClick={() => !disabled && onChange(option.value)}
+          disabled={disabled}
         >
           {option.label}
         </button>
@@ -212,20 +215,26 @@ const App: React.FC = () => {
     hypertension: false,
     stroke_tia: false,
     depression: false,
-    cognitive_impairment: false,
+    cognitive_deficit: false,
+    osteoarthritis: false,
+    parkinson: false,
+    ppi: false,
     hr_method: 'heart_rate',
     heart_rate: 77,
     rr_interval: 778,
     qrs_duration: 17,
     sodium_value: 138.5,
+    potassium_value: 4.2,
+    creatinine_value: 1.13,
     calcium_unit: 'mg_dl',
     calcium_mg_dl: 8.6,
     calcium_mmol_l: 2.15,
-    osteoarthritis: false,
-    race: 'White',
+    hct_value: 40.0,
     insurance: 'Public',
-    osteoporosis: false,
-    parkinson: false
+    availability: {
+      calcium: true,
+      hct: true,
+    },
   });
 
   const [result, setResult] = useState<RiskResponse | null>(null);
@@ -234,19 +243,16 @@ const App: React.FC = () => {
 
   const handleInputChange = (field: keyof FormInputs, value: any) => {
     setFormData(prev => {
-      const newData = { ...prev, [field]: value };
+      const newData = { ...prev, [field]: value } as FormInputs;
 
-      // Auto-calculate BMI when height/weight changes
       if (field === 'weight' || field === 'height') {
         newData.bmi = Math.round(calculateBMI(newData.weight, newData.height) * 10) / 10;
       }
 
-      // Auto-calculate RR interval when heart rate changes
       if (field === 'heart_rate' && newData.hr_method === 'heart_rate') {
         newData.rr_interval = Math.round(heartRateToRRInterval(newData.heart_rate));
       }
 
-      // Auto-calculate calcium conversions
       if (field === 'calcium_mg_dl' && newData.calcium_unit === 'mg_dl') {
         newData.calcium_mmol_l = newData.calcium_mg_dl / 4.008;
       }
@@ -256,6 +262,13 @@ const App: React.FC = () => {
 
       return newData;
     });
+  };
+
+  const setAvailability = (key: keyof Availability, available: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      availability: { ...prev.availability, [key]: available },
+    }));
   };
 
   const calculateBMI = (weight: number, height: number): number => {
@@ -274,41 +287,47 @@ const App: React.FC = () => {
     setError('');
 
     try {
-      // Map race and insurance to numeric codes
-      // Race: 0=White, 1=Black, 2=Other/Unknown
-      const raceMap: { [key: string]: number } = {
-        'White': 0,
-        'Black': 1,
-        'Other/Unknown': 2
-      };
-
-      // Insurance: 0=Public (Medicare/Medicaid), 1=Private, 2=Unknown
       const insuranceMap: { [key: string]: number } = {
         'Public': 0,
         'Private': 1,
-        'Unknown': 2
+        'Unknown': 2,
       };
 
-      // Prepare data for API
+      const av = formData.availability;
+
+      const rr = formData.hr_method === 'heart_rate'
+        ? Math.round(heartRateToRRInterval(formData.heart_rate))
+        : formData.rr_interval;
+
+      const calciumMgDl = av.calcium
+        ? (formData.calcium_unit === 'mg_dl'
+            ? formData.calcium_mg_dl
+            : formData.calcium_mmol_l * 4.008)
+        : MEANS.calcium_mg_dl;
+
       const apiData: PatientData = {
         af_age: formData.af_age,
         marital_status: formData.marital_status,
         weight: formData.weight,
+        height: formData.height,
         bmi: calculateBMI(formData.weight, formData.height),
         diabetes: formData.diabetes,
         hypertension: formData.hypertension,
         stroke_tia: formData.stroke_tia,
         depression: formData.depression,
-        cognitive_impairment: formData.cognitive_impairment,
-        rr_interval: formData.hr_method === 'heart_rate' ? Math.round(heartRateToRRInterval(formData.heart_rate)) : formData.rr_interval,
+        cognitive_deficit: formData.cognitive_deficit,
+        osteoarthritis: formData.osteoarthritis,
+        parkinson: formData.parkinson,
+        ppi: formData.ppi,
+        insurance: insuranceMap[formData.insurance] || 0,
+        rr_interval: rr,
         qrs_duration: formData.qrs_duration,
         sodium_value: formData.sodium_value,
-        calcium_mg_dl: formData.calcium_unit === 'mg_dl' ? formData.calcium_mg_dl : formData.calcium_mmol_l * 4.008,
-        osteoarthritis: formData.osteoarthritis,
-        race: raceMap[formData.race] || 0,
-        insurance: insuranceMap[formData.insurance] || 0,
-        osteoporosis: formData.osteoporosis,
-        parkinson: formData.parkinson
+        potassium_value: formData.potassium_value,
+        creatinine_value: formData.creatinine_value,
+        calcium_mg_dl: calciumMgDl,
+        calcium_available: av.calcium,
+        hct_available: av.hct,
       };
 
       const response = await axios.post<RiskResponse>(`${API_URL}/predict`, apiData);
@@ -326,6 +345,8 @@ const App: React.FC = () => {
     return Math.min(result.risk_percentage, 100);
   };
 
+  const av = formData.availability;
+
   return (
     <div className="app">
       <div className="container">
@@ -336,7 +357,6 @@ const App: React.FC = () => {
         <div className="form-section">
           <div className="single-column-form">
 
-            {/* Age at AF Diagnosis */}
             <div className="form-row">
               <NumberInput
                 label="Age at AF Diagnosis"
@@ -348,7 +368,6 @@ const App: React.FC = () => {
               />
             </div>
 
-            {/* Marital Status */}
             <div className="form-row">
               <RadioButtons
                 label="Marital Status"
@@ -358,7 +377,6 @@ const App: React.FC = () => {
               />
             </div>
 
-            {/* Weight and Height */}
             <div className="form-row dual-input">
               <NumberInput
                 label="Weight"
@@ -383,7 +401,6 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Medical History */}
             <div className="form-row">
               <h3 className="section-divider">Medical History</h3>
             </div>
@@ -422,9 +439,9 @@ const App: React.FC = () => {
 
             <div className="form-row">
               <ToggleSwitch
-                label="Cognitive Impairment"
-                value={formData.cognitive_impairment}
-                onChange={(value) => handleInputChange('cognitive_impairment', value)}
+                label="Cognitive Deficit"
+                value={formData.cognitive_deficit}
+                onChange={(value) => handleInputChange('cognitive_deficit', value)}
               />
             </div>
 
@@ -438,32 +455,26 @@ const App: React.FC = () => {
 
             <div className="form-row">
               <ToggleSwitch
-                label="Osteoporosis"
-                value={formData.osteoporosis}
-                onChange={(value) => handleInputChange('osteoporosis', value)}
-              />
-            </div>
-
-            <div className="form-row">
-              <ToggleSwitch
                 label="Parkinson's Disease"
                 value={formData.parkinson}
                 onChange={(value) => handleInputChange('parkinson', value)}
               />
             </div>
 
-            {/* Demographics */}
             <div className="form-row">
-              <h3 className="section-divider">Demographics</h3>
+              <h3 className="section-divider">Medications</h3>
             </div>
 
             <div className="form-row">
-              <RadioButtons
-                label="Race"
-                options={['White', 'Black', 'Other/Unknown']}
-                value={formData.race}
-                onChange={(value) => handleInputChange('race', value)}
+              <ToggleSwitch
+                label="PPI (Proton Pump Inhibitor)"
+                value={formData.ppi}
+                onChange={(value) => handleInputChange('ppi', value)}
               />
+            </div>
+
+            <div className="form-row">
+              <h3 className="section-divider">Demographics</h3>
             </div>
 
             <div className="form-row">
@@ -475,7 +486,6 @@ const App: React.FC = () => {
               />
             </div>
 
-            {/* Clinical Values */}
             <div className="form-row">
               <h3 className="section-divider">Clinical Values</h3>
             </div>
@@ -486,7 +496,7 @@ const App: React.FC = () => {
                 label="Heart Rate / RR Interval"
                 options={[
                   { value: 'heart_rate', label: 'Heart Rate (bpm)' },
-                  { value: 'rr_interval', label: 'RR Interval (ms)' }
+                  { value: 'rr_interval', label: 'RR Interval (ms)' },
                 ]}
                 value={formData.hr_method}
                 onChange={(value) => handleInputChange('hr_method', value as 'heart_rate' | 'rr_interval')}
@@ -496,12 +506,9 @@ const App: React.FC = () => {
             {formData.hr_method === 'heart_rate' ? (
               <div className="form-row">
                 <NumberInput
-                  label="Heart Rate"
+                  label="Heart Rate" unit="bpm" min={30} max={200}
                   value={formData.heart_rate}
-                  onChange={(value) => handleInputChange('heart_rate', value)}
-                  unit="bpm"
-                  min={30}
-                  max={200}
+                  onChange={(v) => handleInputChange('heart_rate', v)}
                 />
                 <div className="calculated-value">
                   <span>Calculated RR Interval: {heartRateToRRInterval(formData.heart_rate).toFixed(0)} ms</span>
@@ -510,74 +517,99 @@ const App: React.FC = () => {
             ) : (
               <div className="form-row">
                 <NumberInput
-                  label="RR Interval"
+                  label="RR Interval" unit="ms" min={300} max={2000}
                   value={formData.rr_interval}
-                  onChange={(value) => handleInputChange('rr_interval', Math.round(value))}
-                  unit="ms"
-                  min={300}
-                  max={2000}
+                  onChange={(v) => handleInputChange('rr_interval', Math.round(v))}
                 />
               </div>
             )}
 
             <div className="form-row">
               <NumberInput
-                label="QRS Axis"
+                label="QRS Axis" unit="degrees" min={-180} max={180}
                 value={formData.qrs_duration}
-                onChange={(value) => handleInputChange('qrs_duration', value)}
-                unit="degrees"
-                min={60}
-                max={200}
+                onChange={(v) => handleInputChange('qrs_duration', v)}
               />
             </div>
 
             <div className="form-row">
               <NumberInput
-                label="Sodium"
+                label="Sodium" unit="mmol/L" step={0.1} min={120} max={160}
                 value={formData.sodium_value}
-                onChange={(value) => handleInputChange('sodium_value', value)}
-                unit="mmol/L"
-                step={0.1}
-                min={120}
-                max={160}
+                onChange={(v) => handleInputChange('sodium_value', v)}
               />
             </div>
 
-            {/* Calcium */}
+            <div className="form-row">
+              <NumberInput
+                label="Potassium" unit="mmol/L" step={0.1} min={2.5} max={7.0}
+                value={formData.potassium_value}
+                onChange={(v) => handleInputChange('potassium_value', v)}
+              />
+            </div>
+
+            <div className="form-row">
+              <NumberInput
+                label="Creatinine" unit="mg/dL" step={0.01} min={0.1} max={15}
+                value={formData.creatinine_value}
+                onChange={(v) => handleInputChange('creatinine_value', v)}
+              />
+            </div>
+
+            {/* Calcium — has availability toggle (Calcium_missing is a model feature) */}
+            <div className="form-row">
+              <ToggleSwitch
+                label="Calcium availability"
+                value={av.calcium}
+                onChange={(v) => setAvailability('calcium', v)}
+                onLabel="Available"
+                offLabel="Not available"
+              />
+            </div>
             <div className="form-row">
               <CompactToggle
                 label="Calcium"
                 options={[
                   { value: 'mg_dl', label: 'mg/dL' },
-                  { value: 'mmol_l', label: 'mmol/L' }
+                  { value: 'mmol_l', label: 'mmol/L' },
                 ]}
                 value={formData.calcium_unit}
                 onChange={(value) => handleInputChange('calcium_unit', value as 'mg_dl' | 'mmol_l')}
+                disabled={!av.calcium}
               />
+              {formData.calcium_unit === 'mg_dl' ? (
+                <NumberInput
+                  label="Calcium" unit="mg/dL" step={0.1} min={6} max={16}
+                  value={formData.calcium_mg_dl}
+                  onChange={(v) => handleInputChange('calcium_mg_dl', v)}
+                  disabled={!av.calcium}
+                />
+              ) : (
+                <NumberInput
+                  label="Calcium" unit="mmol/L" step={0.01} min={1.5} max={4.0}
+                  value={formData.calcium_mmol_l}
+                  onChange={(v) => handleInputChange('calcium_mmol_l', v)}
+                  disabled={!av.calcium}
+                />
+              )}
             </div>
 
-            {formData.calcium_unit === 'mg_dl' ? (
+            {/* Hematocrit — model uses HCT_missing flag only; value collected for UX completeness */}
+            <div className="form-row">
+              <ToggleSwitch
+                label="Hematocrit availability"
+                value={av.hct}
+                onChange={(v) => setAvailability('hct', v)}
+                onLabel="Available"
+                offLabel="Not available"
+              />
+            </div>
+            {av.hct && (
               <div className="form-row">
                 <NumberInput
-                  label="Calcium"
-                  value={formData.calcium_mg_dl}
-                  onChange={(value) => handleInputChange('calcium_mg_dl', value)}
-                  unit="mg/dL"
-                  step={0.1}
-                  min={6}
-                  max={16}
-                />
-              </div>
-            ) : (
-              <div className="form-row">
-                <NumberInput
-                  label="Calcium"
-                  value={formData.calcium_mmol_l}
-                  onChange={(value) => handleInputChange('calcium_mmol_l', value)}
-                  unit="mmol/L"
-                  step={0.01}
-                  min={1.5}
-                  max={4.0}
+                  label="Hematocrit" unit="%" step={0.1} min={15} max={65}
+                  value={formData.hct_value}
+                  onChange={(v) => handleInputChange('hct_value', v)}
                 />
               </div>
             )}

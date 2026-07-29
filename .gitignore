@@ -1,0 +1,10 @@
+# Superseded feature means from an earlier preprocessing pipeline (80 columns,
+# including AF_age band dummies and ADI ranks that no current model uses).
+# Kept locally for reference; the served model's means are in
+# "Clinical App/model/feature_means.json" -- hence the leading slash, which
+# anchors this to the repo root instead of matching that file too.
+/feature_means.json
+
+# OS
+.DS_Store
+Thumbs.db

@@ -35,3 +35,10 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Model provenance kept out of version control on purpose.
+# Updated_Model/ holds the 77-feature parent model and the study data dictionary;
+# it lives in the lab's OneDrive alongside this repo, not in the public history.
+# Everything needed to serve predictions is in model/ -- see model/README.md.
+Updated_Model/
+Most_Updated_Model/

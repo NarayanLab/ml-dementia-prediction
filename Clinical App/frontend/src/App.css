@@ -166,6 +166,23 @@ body {
   box-shadow: 0 0 0 1px #3b82f6;
 }
 
+.number-input:disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+  border-color: #e5e7eb;
+  cursor: not-allowed;
+}
+
+/* Disabled state for compact toggle */
+.compact-toggle-group.disabled .compact-toggle-btn {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.compact-toggle-group.disabled .compact-toggle-btn.active {
+  background: #9ca3af;
+}
+
 /* Select inputs */
 .select-input {
   width: 100%;

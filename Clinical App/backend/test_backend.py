@@ -1,132 +1,144 @@
 """
-Test script to verify backend functionality with the new 20-feature model
+Verify the 22-feature XGBoost-Cox backend.
+
+Guards the failure modes that actually bit this project:
+  - a booster with the wrong feature count getting deployed
+  - column order taken from the wrong file (feature_importance_ranking.json is an
+    importance ranking, NOT the column order)
+  - a feature silently left at its population mean instead of coming from the form
+
+Run from the backend/ directory:  python test_backend.py
 """
+import asyncio
 import json
-import sys
 import os
+import sys
 
-# Set UTF-8 encoding for Windows console
-if sys.platform == 'win32':
-    os.system('chcp 65001 > nul 2>&1')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-sys.path.insert(0, '..')
+import main
+from main import (MEAN_FILLED_OK, MODEL_DIR, MODEL_FILE, PatientData,
+                  build_feature_row, load_artifacts, predict_risk)
 
-import pandas as pd
-import xgboost as xgb
-import numpy as np
+failures = []
 
-print("=" * 60)
-print("Testing Backend with 20-Feature Model")
-print("=" * 60)
 
-# Load artifacts
-print("\n1. Loading model artifacts...")
-try:
-    booster = xgb.Booster()
-    booster.load_model("../xgb_cox_model.json")
-    print("   ✓ XGBoost model loaded")
+def check(name, cond, detail=""):
+    print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f"   {detail}" if detail and not cond else ""))
+    if not cond:
+        failures.append(name)
 
-    with open("../feature_manifest.json") as f:
-        feature_manifest = json.load(f)
-    print(f"   ✓ Feature manifest loaded: {len(feature_manifest['feature_names'])} features")
 
-    with open("../app_metadata.json") as f:
-        app_metadata = json.load(f)
-    print(f"   ✓ App metadata loaded: {app_metadata['horizon_days']} days horizon")
+def patient(**kw):
+    """Reference patient at population means, overridable per test."""
+    args = dict(
+        af_age=70, marital_status="Married", weight=79.3, height=170.0, bmi=27.2,
+        diabetes=False, hypertension=False, stroke_tia=False, depression=False,
+        cognitive_deficit=False, osteoarthritis=False, parkinson=False, ppi=False,
+        insurance=0, rr_interval=778, qrs_duration=17, sodium_value=138.5,
+        potassium_value=4.2, creatinine_value=1.13, calcium_mg_dl=8.6,
+        calcium_available=True, hct_available=True,
+    )
+    args.update(kw)
+    return PatientData(**args)
 
-    with open("../baseline_hazard.json") as f:
-        baseline_hazard = json.load(f)
-    print(f"   ✓ Baseline hazard loaded: {len(baseline_hazard['event_times'])} time points")
 
-except Exception as e:
-    print(f"   ✗ Error loading artifacts: {e}")
+def risk(**kw):
+    return asyncio.run(predict_risk(patient(**kw))).risk_percentage
+
+
+print("=" * 68)
+print("22-feature dementia risk backend")
+print("=" * 68)
+
+print("\n1. Artifacts")
+load_artifacts()
+check("model loads", main.booster is not None)
+check("exactly 22 features", len(main.feature_names) == 22, f"got {len(main.feature_names)}")
+check("objective is survival:cox",
+      json.loads(main.booster.save_config())["learner"]["objective"]["name"] == "survival:cox")
+
+with open(os.path.join(MODEL_DIR, "meta.json")) as f:
+    meta_names = json.load(f)["feature_names"]
+check("column order matches meta.json", main.feature_names == meta_names)
+
+with open(os.path.join(MODEL_DIR, "feature_importance_ranking.json")) as f:
+    ranking = json.load(f)["order"]
+check("column order is NOT feature_importance_ranking.json (that file is a ranking)",
+      main.feature_names != ranking)
+
+with open(os.path.join(MODEL_DIR, "training_meta.json")) as f:
+    tmeta = json.load(f)
+check("training_meta agrees with the booster's feature list",
+      tmeta["feature_names"] == main.feature_names and tmeta["n_features"] == 22)
+check("feature_means covers all 22", set(main.feature_names) <= set(main.feature_means))
+print(f"        model_file={MODEL_FILE}  S0={main.baseline['S0_tstar']:.6f}  band={main.dca_band['band']}")
+
+print("\n2. Every feature comes from the form, not from a mean")
+# Deliberately off-mean values so any feature still sitting at its population
+# mean is a wiring bug rather than a coincidence.
+row = build_feature_row(patient(
+    af_age=81, weight=91.5, height=161.0, bmi=35.3, diabetes=True, hypertension=True,
+    stroke_tia=True, depression=True, cognitive_deficit=True, osteoarthritis=True,
+    parkinson=True, ppi=True, insurance=2, rr_interval=911, qrs_duration=-44,
+    sodium_value=133.0, potassium_value=5.1, creatinine_value=2.4, calcium_mg_dl=9.9,
+    marital_status="Divorced/Widowed"))
+check("row has exactly the 22 model features", set(row) == set(main.feature_names),
+      f"extra={sorted(set(row) - set(main.feature_names))} missing={sorted(set(main.feature_names) - set(row))}")
+stuck = [f for f in main.feature_names
+         if f not in MEAN_FILLED_OK and abs(row[f] - main.feature_means[f]) < 1e-9]
+check("no feature left at its population mean", not stuck, f"stuck at mean: {stuck}")
+
+print("\n3. Risk is a valid probability")
+for label, kw in [("reference", {}), ("youngest", dict(af_age=40)),
+                  ("oldest + all comorbid", dict(af_age=95, diabetes=True, hypertension=True,
+                                                 stroke_tia=True, depression=True,
+                                                 cognitive_deficit=True, osteoarthritis=True,
+                                                 parkinson=True, ppi=True))]:
+    r = risk(**kw)
+    check(f"0 < risk < 100  ({label}: {r:.2f}%)", 0.0 < r < 100.0)
+
+print("\n4. Monotone in age")
+ages = [55, 60, 65, 70, 75, 80, 85, 90]
+risks = [risk(af_age=a) for a in ages]
+print("        " + "  ".join(f"{a}:{r:.2f}%" for a, r in zip(ages, risks)))
+check("non-decreasing across 55-90", all(b >= a - 1e-9 for a, b in zip(risks, risks[1:])))
+check("age has an effect below 65 (the 20-feature model was flat there)",
+      risk(af_age=55) != risk(af_age=64))
+
+print("\n5. Known risk factors move risk upward")
+base = risk(af_age=80)
+for label, kw in [("cognitive deficit", dict(cognitive_deficit=True)),
+                  ("Parkinson", dict(parkinson=True)),
+                  ("stroke/TIA", dict(stroke_tia=True)),
+                  ("depression", dict(depression=True)),
+                  ("diabetes", dict(diabetes=True))]:
+    r = risk(af_age=80, **kw)
+    check(f"{label}: {base:.2f}% -> {r:.2f}%", r > base)
+
+print("\n6. Availability toggles are wired to their _missing flags")
+check("calcium unavailable changes the prediction",
+      risk(calcium_available=True) != risk(calcium_available=False))
+check("HCT unavailable changes the prediction",
+      risk(hct_available=True) != risk(hct_available=False))
+
+print("\n7. Marital encoding matches the data dictionary")
+# 0 Single, 1 Married, 2 Divorced/Widowed, 3 Unknown
+check("all four marital codes accepted and encoded per dictionary",
+      [build_feature_row(patient(marital_status=s))["Marital"]
+       for s in ("Single", "Married", "Divorced/Widowed", "Unknown")] == [0, 1, 2, 3])
+
+print("\n8. Risk categories follow the DCA band")
+low, high = main.dca_band["band"]
+for kw in [{}, dict(af_age=80), dict(af_age=95, cognitive_deficit=True, parkinson=True)]:
+    resp = asyncio.run(predict_risk(patient(**kw)))
+    p = resp.risk_percentage / 100.0
+    expected = "Low Risk" if p <= low else ("Medium Risk" if p <= high else "High Risk")
+    check(f"{resp.risk_percentage:6.2f}% -> {resp.risk_category}", resp.risk_category == expected)
+
+print("\n" + "=" * 68)
+if failures:
+    print(f"{len(failures)} CHECK(S) FAILED: {failures}")
     sys.exit(1)
-
-# Test patient data
-print("\n2. Creating test patient data...")
-test_patient = {
-    "AF_age_4": 0,  # Age 70 -> not >= 85
-    "AF_age_3": 0,  # Age 70 -> not 75-84
-    "weight": 79.3,
-    "AF_age_2": 1,  # Age 70 -> 65-74
-    "bmi": 27.2,
-    "DM": 0,
-    "Marital": 2,  # Married
-    "TIA_CVA_Stroke": 0,
-    "RR Value 3mo": 778,
-    "Depression": 0,
-    "QRS Value 3mo": 100,
-    "HTN": 0,
-    "Cognitive_Impairment": 0,
-    "Sodium Value 3mo": 138.5,
-    "Calcium Value 3mo": 9.6,
-    "Osteoarthritis": 0,
-    "race": 0,  # White
-    "Insurance": 0,  # Medicare
-    "Osteoporosis": 0,
-    "Parkinson": 0,
-}
-print(f"   ✓ Test patient created with {len(test_patient)} features")
-
-# Verify feature order
-feature_names = feature_manifest["feature_names"]
-print("\n3. Verifying feature order...")
-for i, feat_name in enumerate(feature_names):
-    if feat_name not in test_patient:
-        print(f"   ✗ Missing feature: {feat_name}")
-        sys.exit(1)
-print(f"   ✓ All {len(feature_names)} features present")
-
-# Create DataFrame
-print("\n4. Creating feature DataFrame...")
-X_row = pd.DataFrame([test_patient], columns=feature_names)
-print(f"   ✓ DataFrame shape: {X_row.shape}")
-print(f"   ✓ Columns: {list(X_row.columns)}")
-
-# Make prediction
-print("\n5. Making prediction...")
-try:
-    margin = booster.predict(xgb.DMatrix(X_row), output_margin=True)
-    print(f"   ✓ Margin (log hazard ratio): {margin[0]:.6f}")
-
-    # Calculate risk
-    horizon_years = app_metadata["horizon_days"] / 365.25
-    event_times_array = np.array(baseline_hazard["event_times"])
-    cum_hazard_array = np.array(baseline_hazard["cum_baseline_hazard"])
-
-    idx = np.searchsorted(event_times_array, horizon_years, side='right') - 1
-    idx = max(0, min(idx, len(cum_hazard_array) - 1))
-    H0_t = cum_hazard_array[idx]
-
-    hazard_ratio = np.exp(float(margin[0]))
-    survival_prob = np.exp(-H0_t * hazard_ratio)
-    risk = 1.0 - survival_prob
-    risk_percentage = risk * 100
-
-    print(f"   ✓ Cumulative baseline hazard at {horizon_years:.2f} years: {H0_t:.6f}")
-    print(f"   ✓ Hazard ratio: {hazard_ratio:.6f}")
-    print(f"   ✓ Survival probability: {survival_prob:.6f}")
-    print(f"   ✓ Risk: {risk_percentage:.2f}%")
-
-    # Determine risk category
-    low_threshold = app_metadata["risk_thresholds"]["low"]
-    high_threshold = app_metadata["risk_thresholds"]["high"]
-
-    if risk <= low_threshold:
-        category = "Low Risk"
-    elif risk <= high_threshold:
-        category = "Medium Risk"
-    else:
-        category = "High Risk"
-
-    print(f"   ✓ Risk category: {category}")
-
-except Exception as e:
-    print(f"   ✗ Prediction error: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-
-print("\n" + "=" * 60)
-print("✓ All tests passed!")
-print("=" * 60)
+print("All checks passed.")
+print("=" * 68)
