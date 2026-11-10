@@ -50,7 +50,21 @@ Frontend runs on `http://localhost:3000`. On Windows, `start.bat` launches both.
 cd backend && python test_backend.py     # model wiring + behavioural checks
 cd frontend && npm test                  # form renders the required inputs
 ```
-The backend demo uses example patient profiles embedded in test_backend.py. On the tested Mac, it completed in 5.704 seconds and printed All checks passed.
+## Reviewer demo
+
+The backend demo loads the trained XGBoost-Cox model and runs predictions on the example patient profiles embedded in [`backend/test_backend.py`](backend/test_backend.py).
+
+- **Tested environment** — macOS 26.5.2 on Apple Silicon (`arm64`), using Python 3.11.9. The demo ran on CPU without a GPU.
+- **Python dependencies** — Versions are pinned in [`backend/requirements.txt`](backend/requirements.txt).
+- **Measured installation time** — 20.364 seconds for `python -m pip install -r requirements.txt` on the tested Mac. This timing excludes Homebrew and `libomp` setup.
+
+After completing the backend setup above, run this from the `backend` directory with the virtual environment active:
+
+```bash
+python test_backend.py
+```
+
+The demo printed example five-year risk percentages and ended with `All checks passed.` The measured demo runtime was 5.704 seconds.
 
 `test_backend.py` guards the mistakes that have actually happened here: a booster
 with the wrong feature count, column order read from the importance-ranking file
