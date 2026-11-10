@@ -14,14 +14,24 @@ Live demo: https://ml-dementia-prediction-1.onrender.com/
 
 ### Backend
 
+On macOS, install the OpenMP runtime required by XGBoost. With [Homebrew](https://brew.sh/) installed, run this once:
+
+```bash
+brew install libomp
+```
+
+From the `Clinical App` directory, set up and start the backend:
+
 ```bash
 cd backend
-pip install -r requirements.txt
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 python main.py
 ```
 
 Backend runs on `http://localhost:8000`. Check `GET /health` to confirm which
-model got loaded — it reports the model filename, feature count, `S0_tstar`, and
+model got loaded. It reports the model filename, feature count, `S0_tstar`, and
 the risk-threshold band.
 
 ### Frontend
@@ -40,6 +50,7 @@ Frontend runs on `http://localhost:3000`. On Windows, `start.bat` launches both.
 cd backend && python test_backend.py     # model wiring + behavioural checks
 cd frontend && npm test                  # form renders the required inputs
 ```
+The backend demo uses example patient profiles embedded in test_backend.py. On the tested Mac, it completed in 5.704 seconds and printed All checks passed.
 
 `test_backend.py` guards the mistakes that have actually happened here: a booster
 with the wrong feature count, column order read from the importance-ranking file
